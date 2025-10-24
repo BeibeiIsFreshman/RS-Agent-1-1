@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>DINOv3 LLM Agent 检测系统</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body {
+      padding: 30px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    }
+    .main-container {
+      background: white;
+      border-radius: 15px;
+      padding: 30px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 30px;
+      padding-bottom: 20px;
+      border-bottom: 2px solid #667eea;
+    }
+    .header h1 {
+      color: #667eea;
+      font-weight: bold;
+    }
+    .chat-history {
+      height: 420px;
+      overflow-y: auto;
+      background: #f8f9fa;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      border: 1px solid #e9ecef;
+    }
+    .chat-message {
+      margin-bottom: 15px;
+      padding: 10px 14px;
+      border-radius: 12px;
+      max-width: 80%;
+      word-wrap: break-word;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .user-message {
+      background: #d1e7dd;
+      align-self: flex-end;
+      margin-left: auto;
+      border-bottom-right-radius: 4px;
+    }
+    .bot-message {
+      background: #f8d7da;
+      align-self: flex-start;
+      margin-right: auto;
+      border-bottom-left-radius: 4px;
+    }
+    .system-message {
+      background: #fff3cd;
+      font-size: 0.9em;
+      color: #856404;
+      text-align: center;
+      margin: 10px auto;
+      max-width: 90%;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border: none;
+      padding: 12px 30px;
+      font-weight: bold;
+    }
+    .btn-success {
+      background: #28a745;
+      border: none;
+      font-size: 0.85rem;
+      padding: 4px 12px;
+    }
+    .upload-status {
+      font-size: 0.85rem;
+      margin-top: 5px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container main-container">
+    <div class="header">
+      <h1>DINOv3 LLM Agent 检测系统</h1>
+      <p class="subtitle">先上传图片 → 再输入指令（如“检测坦克”）</p>
+    </div>
+
+    <!-- 聊天历史 -->
+    <div class="chat-history" id="chatHistory"></div>
+
+    <!-- 输入表单 -->
+    <form id="chatForm">
+      <div class="row g-2 align-items-center">
+        <div class="col-md-6">
+          <input class="form-control" type="text" id="query" placeholder="例如：检测坦克" required>
+          <small class="text-muted">支持类别：tank, car, Missle</small>
+        </div>
+        <div class="col-md-4">
+          <input class="form-control" type="file" id="file" accept="image/*">
+          <div class="upload-status" id="uploadStatus"></div>
+        </div>
+        <div class="col-md-2">
+          <button type="submit" class="btn btn-primary w-100">发送</button>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    const chatHistory = document.getElementById('chatHistory');
+    const uploadStatus = document.getElementById('uploadStatus');
+    let currentImageId = null;
+
+    const addMessage = (sender, text, imgSrc = '') => {
+      const div = document.createElement('div');
+      div.className = `chat-message ${sender}-message`;
+      div.innerHTML = `<strong>${sender === 'user' ? '你' : sender === 'system' ? '系统' : 'AI'}:</strong> ${text}`;
+      if (imgSrc) {
+        const img = document.createElement('img');
+        img.src = imgSrc;
+        img.className = 'result-img';
+        img.style.maxWidth = '100%';
+        img.style.borderRadius = '8px';
+        img.style.marginTop = '8px';
+        div.appendChild(img);
+      }
+      chatHistory.appendChild(div);
+      chatHistory.scrollTop = chatHistory.scrollHeight;
+    };
+
+    // 上传图片
+    async function uploadImage(file) {
+      uploadStatus.textContent = '上传中...';
+      uploadStatus.style.color = '#6c757d';
+      const form = new FormData();
+      form.append('file', file);
+      try {
+        const res = await fetch('/ai/upload', {
+          method: 'POST',
+          body: form
+        });
+        const data = await res.json();
+        if (data.image_id) {
+          currentImageId = data.image_id;
+          uploadStatus.textContent = `上传成功（ID: ${data.image_id.slice(0, 8)}...）`;
+          uploadStatus.style.color = '#28a745';
+          addMessage('system', `图片已上传，可输入指令检测`);
+        } else {
+          uploadStatus.textContent = `上传失败: ${data.error || '未知错误'}`;
+          uploadStatus.style.color = '#dc3545';
+        }
+      } catch (err) {
+        uploadStatus.textContent = `上传错误: ${err.message}`;
+        uploadStatus.style.color = '#dc3545';
+      }
+    }
+
+    // 发送聊天
+    async function sendMessage() {
+      const query = document.getElementById('query').value.trim();
+      if (!query) return;
+
+      addMessage('user', query);
+      document.getElementById('query').value = '';
+
+      try {
+        const payload = { query };
+        if (currentImageId) {
+          payload.image_id = currentImageId;
+        }
+
+        const res = await fetch('/ai/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+
+        // 思考过程
+        if (data.think && data.think.trim()) {
+          addMessage('bot', `<em>思考过程：</em> ${data.think}`);
+        }
+
+        const result = data.result || {};
+
+        // 错误信息
+        if (result.error) {
+          addMessage('bot', `<span style="color:red; font-weight:bold;">错误：${result.error}</span>`);
+          return;
+        }
+
+        // 纯文本回复
+        if (result.text) {
+          addMessage('bot', result.text);
+          return;
+        }
+
+        // 检测结果：只显示数量 + 下载按钮
+        if (typeof result.targetsNum === 'number') {
+          const msg = `检测到 <strong>${result.targetsNum}</strong> 个目标`;
+          addMessage('bot', msg);
+
+          // 下载按钮
+          if (result.result_image_path) {
+            const filename = result.result_image_path.split('/').pop();
+            const downloadBtn = `<br><a href="/download/${filename}" target="_blank" class="btn btn-success mt-2">下载结果图</a>`;
+            addMessage('bot', downloadBtn);
+          }
+
+          // 目标详情
+          if (result.targets && result.targets.length > 0) {
+            const details = result.targets.map(t =>
+              `• ${t.label_name || 'class' + t.label}: ${t.score.toFixed(3)} [${t.bbox.map(v => Math.round(v)).join(', ')}]`
+            ).join('<br>');
+            addMessage('bot', `<small>${details}</small>`);
+          }
+          return;
+        }
+
+        // 兜底
+        addMessage('bot', '未返回有效结果');
+
+      } catch (err) {
+        addMessage('bot', `<span style="color:red;">请求失败：${err.message}</span>`);
+      }
+    }
+
+    // 表单提交
+    document.getElementById('chatForm').onsubmit = async e => {
+      e.preventDefault();
+      const fileInput = document.getElementById('file');
+      const file = fileInput.files[0];
+
+      if (file) {
+        await uploadImage(file);
+        fileInput.value = '';
+      }
+
+      const query = document.getElementById('query').value.trim();
+      if (query) {
+        await sendMessage();
+      }
+    };
+
+    // 初始化提示
+    addMessage('bot', '你好！我是目标检测专家，请先上传一张图片，然后输入指令（如“检测坦克”）。');
+  </script>
+</body>
+</html>
